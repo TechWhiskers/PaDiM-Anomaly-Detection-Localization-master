@@ -97,7 +97,7 @@ def main():
                     _ = model(x.to(device))
                 # get intermediate layer outputs
                 for k, v in zip(train_outputs.keys(), outputs):
-                    train_outputs[k].append(v.cpu().detach())
+                    train_outputs[k].append(v)
                 # initialize hook outputs
                 outputs = []
             for k, v in train_outputs.items():
@@ -113,12 +113,12 @@ def main():
             # calculate multivariate Gaussian distribution
             B, C, H, W = embedding_vectors.size()
             embedding_vectors = embedding_vectors.view(B, C, H * W)
-            mean = torch.mean(embedding_vectors, dim=0).numpy()
+            mean = torch.mean(embedding_vectors, dim=0).cpu().numpy()
             cov = torch.zeros(C, C, H * W).numpy()
             I = np.identity(C)
             for i in range(H * W):
                 # cov[:, :, i] = LedoitWolf().fit(embedding_vectors[:, :, i].numpy()).covariance_
-                cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+                cov[:, :, i] = np.cov(embedding_vectors[:, :, i].cpu().numpy(), rowvar=False) + 0.01 * I
             # save learned distribution
             train_outputs = [mean, cov]
             print('save train set feature to: %s' % train_feature_filepath)
