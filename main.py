@@ -1,6 +1,7 @@
 import random
 from random import sample
 import argparse
+import time
 import numpy as np
 import os
 import pickle
@@ -31,8 +32,8 @@ device = torch.device('cuda' if use_cuda else 'cpu')
 
 def parse_args():
     parser = argparse.ArgumentParser('PaDiM')
-    parser.add_argument('--data_path', type=str, default='D:/dataset/mvtec_anomaly_detection')
-    parser.add_argument('--save_path', type=str, default='./mvtec_result')
+    parser.add_argument('--data_path', type=str, default='/home/acer/mvtec_anomaly_detection')
+    parser.add_argument('--save_path', type=str, default='/home/acer/mvtec_result')
     parser.add_argument('--arch', type=str, choices=['resnet18', 'wide_resnet50_2'], default='wide_resnet50_2')
     return parser.parse_args()
 
@@ -57,7 +58,7 @@ def main():
     if use_cuda:
         torch.cuda.manual_seed_all(1024)
 
-    idx = torch.tensor(sample(range(0, t_d), d))
+    idx = torch.tensor(sample(range(0, t_d), d)).cuda()
 
     # set model's intermediate outputs
     outputs = []
@@ -120,12 +121,26 @@ def main():
                 cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
             # save learned distribution
             train_outputs = [mean, cov]
+            print('save train set feature to: %s' % train_feature_filepath)
             with open(train_feature_filepath, 'wb') as f:
                 pickle.dump(train_outputs, f)
         else:
             print('load train set feature from: %s' % train_feature_filepath)
             with open(train_feature_filepath, 'rb') as f:
                 train_outputs = pickle.load(f)
+
+        mean=torch.from_numpy(train_outputs[0]).cuda()
+        cov = torch.from_numpy(train_outputs[1]).cuda()
+
+        cov_inv= []
+        #  B, C, H, W = embedding_vectors.size()
+
+        print('compute conv_inv')
+        s=time.time()
+        for i in range(cov.size(-1)):
+            cov_inv_i = torch.inverse(cov[:, :, i])
+            cov_inv.append(cov_inv_i)
+        print(f'process conv_inv takes {time.time()-s} seconds')
 
         gt_list = []
         gt_mask_list = []
@@ -141,7 +156,7 @@ def main():
                 _ = model(x.to(device))
             # get intermediate layer outputs
             for k, v in zip(test_outputs.keys(), outputs):
-                test_outputs[k].append(v.cpu().detach())
+                test_outputs[k].append(v)
             # initialize hook outputs
             outputs = []
         for k, v in test_outputs.items():
@@ -157,22 +172,30 @@ def main():
         
         # calculate distance matrix
         B, C, H, W = embedding_vectors.size()
-        embedding_vectors = embedding_vectors.view(B, C, H * W).numpy()
-        dist_list = []
-        for i in range(H * W):
-            mean = train_outputs[0][:, i]
-            conv_inv = np.linalg.inv(train_outputs[1][:, :, i])
-            dist = [mahalanobis(sample[:, i], mean, conv_inv) for sample in embedding_vectors]
-            dist_list.append(dist)
+        embedding_vectors = embedding_vectors.view(B, C, H * W)
+        dist_list = torch.zeros(size=(H*W, B))
+        #  dist_list = []
+        #  for i in range(H * W):
+            #  mean = train_outputs[0][:, i]
+            #  conv_inv = np.linalg.inv(train_outputs[1][:, :, i])
+            #  dist = [mahalanobis(sample[:, i], mean, conv_inv) for sample in embedding_vectors]
+            #  dist_list.append(dist)
 
-        dist_list = np.array(dist_list).transpose(1, 0).reshape(B, H, W)
+        for i in range(H*W):
+            delta = embedding_vectors[:, :, i] - mean[:, i]
+            m_dist = torch.sqrt(torch.diag(torch.mm(torch.mm(delta, cov_inv[i]), delta.t())))
+            dist_list[i] = m_dist
+
+        #  dist_list = np.array(dist_list).transpose(1, 0).reshape(B, H, W)
+        dist_list = dist_list.transpose(1, 0).view(B, H, W)
 
         # upsample
-        dist_list = torch.tensor(dist_list)
+        #  dist_list = torch.tensor(dist_list)
         score_map = F.interpolate(dist_list.unsqueeze(1), size=x.size(2), mode='bilinear',
                                   align_corners=False).squeeze().numpy()
         
         # apply gaussian smoothing on the score map
+        print('score_map shape: ', score_map.shape)
         for i in range(score_map.shape[0]):
             score_map[i] = gaussian_filter(score_map[i], sigma=4)
         
@@ -289,7 +312,7 @@ def embedding_concat(x, y):
     s = int(H1 / H2)
     x = F.unfold(x, kernel_size=s, dilation=1, stride=s)
     x = x.view(B, C1, -1, H2, W2)
-    z = torch.zeros(B, C1 + C2, x.size(2), H2, W2)
+    z = torch.zeros(B, C1 + C2, x.size(2), H2, W2).cuda()
     for i in range(x.size(2)):
         z[:, :, i, :, :] = torch.cat((x[:, :, i, :, :], y), 1)
     z = z.view(B, -1, H2 * W2)
