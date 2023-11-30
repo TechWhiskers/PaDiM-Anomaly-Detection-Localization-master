@@ -94,17 +94,15 @@ def embedding_concat(x, y):
 
     return z
 
-def hook(module, input, output):
-    outputs.append(output)
-
 t_d = 1792
 d = 550
-threshold=0.3
+threshold=0.5
 class_name='iphone'
 idx = torch.tensor(sample(range(0, t_d), d)).cuda()
 dataset_root='/home/acer/iphone/train/good'
 save_path='/home/shared/samba/s2/s3/test/padim'
-test_dataset_root='/home/acer/iphone/test/bad'
+#  test_dataset_root='/home/acer/iphone/test/bad'
+test_dataset_root='/home/acer/iphone/train/good'
 train_feature_filepath='/home/acer/embeddings.npy'
 
 device='cuda:0'
@@ -202,24 +200,14 @@ else:
             dist_list[i] = m_dist
 
         dist_list = dist_list.transpose(1, 0).view(B, H, W)
+        print(dist_list.shape)
         score_map = F.interpolate(dist_list.unsqueeze(1), size=input_shape[2], mode='bilinear', align_corners=False).squeeze().cpu().numpy()
 
-        for i in range(score_map.shape[0]):
-            score_map[i] = gaussian_filter(score_map[i], sigma=4)
+        # apply gaussian smoothing on the score map
+        score_map = gaussian_filter(score_map, sigma=4)
 
         print('prcossing time takes %s seconds' % str(time.time()-s))
 
-        #  dist_list = np.array(dist_list).transpose(1, 0).reshape(B, H, W)
-
-        # upsample
-        #  dist_list = torch.tensor(dist_list)
-        #  score_map = F.interpolate(dist_list.unsqueeze(1), size=input_shape[2], mode='bilinear',
-                                  #  align_corners=False).squeeze().numpy()
-        
-        # apply gaussian smoothing on the score map
-        #  for i in range(score_map.shape[0]):
-            #  score_map[i] = gaussian_filter(score_map[i], sigma=4)
-        
         # Normalization
         max_score = score_map.max()
         min_score = score_map.min()
